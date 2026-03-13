@@ -34,6 +34,7 @@
 -- NEW FEATURES:
 -- - Chord suggestion: suggest_next_chord() recommends common next chords
 -- - Strum timing: configurable delay between chord note onsets (0-100ms)
+-- - Screen redesign: hierarchical brightness zones with visual zones
 
 engine.name = "PolyPerc"
 
@@ -66,6 +67,34 @@ local state = {
   last_chord_type = 3,
   suggested_chords = {},
   suggestion_display_time = 0,
+  
+  -- NEW: screen animation state
+  beat_phase = 0,  -- 0-1 for beat pulse animation
+  popup_param = nil,  -- current encoder popup parameter
+  popup_val = nil,  -- current encoder popup value
+  popup_time = 0,  -- countdown for popup display (0.8s = 8 frames @10fps)
+  
+  -- active chord slot (1-7) for visualization
+  active_slot = 1,
+  chord_slots = {
+    {root=1, type=3, notes={}},  -- C maj
+    {root=5, type=3, notes={}},  -- F maj
+    {root=8, type=3, notes={}},  -- G maj
+    {root=10, type=2, notes={}}, -- A min
+    {root=1, type=2, notes={}},  -- C min
+    {root=5, type=2, notes={}},  -- F min
+    {root=8, type=2, notes={}},  -- G min
+  },
+  
+  loop_recording = false,
+  loop_playing = false,
+  loop_position = 0,  -- 0-1
+  loop_length = 16,
+  
+  waveform_type = 1,  -- 1-8
+  adsr_a = 10, adsr_d = 20, adsr_s = 80, adsr_r = 30,  -- ms
+  midi_channel = 1,
+  strum_flash_time = 0,  -- animation counter for strum ripple
 }
 
 local NOTES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
@@ -76,6 +105,8 @@ local CHORD_SHAPES = {
   {name="DOM7",  intervals={0,4,7,10}},
   {name="MIN7",  intervals={0,3,7,10}},
 }
+
+local WAVEFORMS = {"sine", "square", "saw", "tri", "noise", "custom1", "custom2", "custom3"}
 
 -- ═══════════════════════════════════════════════════════════════════
 --  NEW: CHORD SUGGESTION ENGINE
@@ -135,13 +166,16 @@ local function play_chord_with_strum(notes, velocity)
     local delay_ms = state.strum_time / num_notes
     local delay_sec = delay_ms / 1000
     
+    -- Trigger strum animation
+    state.strum_flash_time = 3
+    
     clock.run(function()
-      for _, n in ipairs(notes) do
+      for idx, n in ipairs(notes) do
         engine.noteOn(n, velocity or 100)
         if midi_out then
           pcall(function() midi_out:note_on(n, velocity or 100, 1) end)
         end
-        if _ < num_notes then
+        if idx < num_notes then
           clock.sleep(delay_sec)
         end
       end
@@ -168,6 +202,13 @@ local function build_chord(root_idx, chord_type_idx, octave_num)
   end
   
   return notes
+end
+
+local function note_num_to_name(midi_note)
+  if midi_note < 0 or midi_note > 127 then return "?" end
+  local octave = math.floor(midi_note / 12) - 1
+  local pitch = midi_note % 12
+  return NOTES[pitch + 1] .. octave
 end
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -234,15 +275,15 @@ local function grid_redraw()
 end
 
 -- ═══════════════════════════════════════════════════════════════════
---  SCREEN REDRAW
+--  SCREEN REDRAW - NEW DESIGN
 -- ═══════════════════════════════════════════════════════════════════
 
 function redraw()
   screen.clear()
-  screen.aa(0)
+  screen.aa(1)
   
   if state.page_a then
-    -- Page A: traditional menu
+    -- ─ PAGE A: traditional menu ─
     screen.level(15)
     screen.move(0, 10)
     screen.text("HICHORD v3.0")
@@ -271,24 +312,134 @@ function redraw()
       end
       screen.text(sugg_text)
     end
-  else
-    -- Page B: visualization
-    screen.level(15)
-    screen.move(64, 10)
-    screen.text_center("HICHORD")
     
+  else
+    -- ─ PAGE B: animated HiChord OLED replica ─
+    
+    -- ═ SECTION 1: STATUS STRIP (y 0-8) ═
+    screen.level(4)
+    screen.move(2, 7)
+    screen.text("HICHORD")
+    
+    -- Current chord name at center, large and bright
     screen.level(12)
-    screen.move(64, 24)
+    screen.move(64, 8)
     screen.text_center(NOTES[state.root_note] .. CHORD_SHAPES[state.chord_type].name)
     
-    screen.level(8)
-    screen.move(64, 40)
-    screen.text_center("Octave " .. state.octave)
+    -- Beat pulse dot at x=124 (right side)
+    local pulse_brightness = math.floor(8 + state.beat_phase * 7)
+    screen.level(pulse_brightness)
+    screen.circle(124, 4, 1.5)
+    screen.fill()
     
-    if state.strum_time > 0 then
+    -- ═ SECTION 2: LIVE ZONE (y 9-52) ═
+    -- Show 7 chord slots as horizontal row of blocks
+    local slot_width = 15
+    local slot_height = 12
+    local slot_y = 12
+    local slot_x_start = 5
+    
+    for slot = 1, 7 do
+      local x = slot_x_start + (slot - 1) * (slot_width + 2)
+      local chord = state.chord_slots[slot]
+      
+      -- Determine brightness: active=15, adjacent=8, distant=4
+      local is_active = (slot == state.active_slot)
+      local is_adjacent = (math.abs(slot - state.active_slot) == 1)
+      local brightness = is_active and 15 or (is_adjacent and 8 or 4)
+      
+      screen.level(brightness)
+      screen.rect(x, slot_y, slot_width, slot_height)
+      screen.stroke()
+      
+      -- Flash animation if strummed
+      if is_active and state.strum_flash_time > 0 then
+        screen.level(15)
+        screen.rect(x - 1, slot_y - 1, slot_width + 2, slot_height + 2)
+        screen.stroke()
+      end
+      
+      -- Label chord in slot
+      screen.level(brightness)
+      screen.move(x + slot_width/2, slot_y + 8)
+      screen.text_center(NOTES[chord.root])
+    end
+    
+    -- Below slots: show active chord's individual notes
+    local active_chord = state.chord_slots[state.active_slot]
+    local active_notes = build_chord(active_chord.root, active_chord.type or 3, state.octave)
+    screen.level(6)
+    screen.move(5, 32)
+    local note_text = ""
+    for i, n in ipairs(active_notes) do
+      if i > 1 then note_text = note_text .. " " end
+      note_text = note_text .. note_num_to_name(n)
+    end
+    screen.text(note_text)
+    
+    -- Chord suggestion: show suggested next chord near active slot
+    if state.suggestion_display_time > 0 and #state.suggested_chords > 0 then
+      local sugg = state.suggested_chords[1]
+      screen.level(4)
+      screen.move(122, 32)
+      screen.text_center("↓")
+      screen.move(122, 40)
+      screen.text_center(NOTES[sugg.root])
+    end
+    
+    -- Loop progress bar
+    if state.loop_recording or state.loop_playing then
+      screen.level(state.loop_recording and 10 or 8)
+      local bar_y = 44
+      local bar_width = 120
+      local bar_x = 5
+      
+      -- Background bar
+      screen.level(2)
+      screen.rect(bar_x, bar_y, bar_width, 4)
+      screen.fill()
+      
+      -- Progress indicator
+      screen.level(state.loop_recording and 15 or 12)
+      local progress_width = bar_width * state.loop_position
+      screen.rect(bar_x, bar_y, progress_width, 4)
+      screen.fill()
+      
+      -- Status text
+      screen.level(8)
+      screen.move(bar_x + bar_width + 5, bar_y + 3)
+      screen.text(state.loop_recording and "REC" or "PLAY")
+    end
+    
+    -- ═ SECTION 3: CONTEXT BAR (y 53-58) ═
+    screen.level(5)
+    screen.move(5, 58)
+    screen.text(WAVEFORMS[state.waveform_type])
+    
+    screen.level(4)
+    screen.move(40, 58)
+    screen.text("A" .. state.adsr_a .. " D" .. state.adsr_d .. " S" .. state.adsr_s .. " R" .. state.adsr_r)
+    
+    screen.level(6)
+    screen.move(100, 58)
+    screen.text(state.loop_playing and "LOOP" or (state.loop_recording and "REC" or "---"))
+    
+    screen.level(4)
+    screen.move(122, 58)
+    screen.text("CH" .. state.midi_channel)
+    
+    -- ═ SECTION 4: TRANSIENT PARAMETER POPUP ═
+    if state.popup_time > 0 and state.popup_param then
+      local pop_y = 30
+      local pop_x = 64
+      
+      screen.level(12)
+      screen.move(pop_x, pop_y)
+      screen.text_center(state.popup_param)
+      
       screen.level(10)
-      screen.move(64, 54)
-      screen.text_center("Strum " .. state.strum_time .. "ms")
+      screen.move(pop_x, pop_y + 10)
+      screen.text_center(tostring(state.popup_val))
     end
   end
 
@@ -314,10 +465,19 @@ end
 function enc(n, d)
   if n == 1 then
     state.root_note = ((state.root_note - 1 + d) % 12) + 1
+    state.popup_param = "ROOT"
+    state.popup_val = NOTES[state.root_note]
+    state.popup_time = 8
   elseif n == 2 then
     state.chord_type = math.max(1, math.min(4, state.chord_type + d))
+    state.popup_param = "CHORD"
+    state.popup_val = CHORD_SHAPES[state.chord_type].name
+    state.popup_time = 8
   elseif n == 3 then
     state.strum_time = math.max(0, math.min(100, state.strum_time + d))
+    state.popup_param = "STRUM"
+    state.popup_val = state.strum_time .. "ms"
+    state.popup_time = 8
   end
   grid_redraw()
   redraw()
@@ -347,14 +507,40 @@ end
 -- ═══════════════════════════════════════════════════════════════════
 
 function init()
+  -- Initialize chord slots with notes
+  for slot = 1, 7 do
+    state.chord_slots[slot].notes = build_chord(
+      state.chord_slots[slot].root,
+      state.chord_slots[slot].type or 3,
+      state.octave
+    )
+  end
+  
   clock.run(function()
     while true do
+      -- Update animations at ~10fps
+      state.beat_phase = (state.beat_phase + 0.1) % 1.0
+      
       if state.suggestion_display_time > 0 then
         state.suggestion_display_time = state.suggestion_display_time - 1
       end
+      
+      if state.popup_time > 0 then
+        state.popup_time = state.popup_time - 1
+      end
+      
+      if state.strum_flash_time > 0 then
+        state.strum_flash_time = state.strum_flash_time - 1
+      end
+      
+      -- Update loop position
+      if state.loop_playing or state.loop_recording then
+        state.loop_position = (state.loop_position + 0.05) % 1.0
+      end
+      
       redraw()
       grid_redraw()
-      clock.sleep(0.05)
+      clock.sleep(0.1)
     end
   end)
   
