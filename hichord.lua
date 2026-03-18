@@ -67,13 +67,13 @@ local state = {
   last_chord_type = 3,
   suggested_chords = {},
   suggestion_display_time = 0,
-  
+
   -- NEW: screen animation state
   beat_phase = 0,  -- 0-1 for beat pulse animation
   popup_param = nil,  -- current encoder popup parameter
   popup_val = nil,  -- current encoder popup value
   popup_time = 0,  -- countdown for popup display (0.8s = 8 frames @10fps)
-  
+
   -- active chord slot (1-7) for visualization
   active_slot = 1,
   chord_slots = {
@@ -85,16 +85,33 @@ local state = {
     {root=5, type=2, notes={}},  -- F min
     {root=8, type=2, notes={}},  -- G min
   },
-  
+
   loop_recording = false,
   loop_playing = false,
   loop_position = 0,  -- 0-1
   loop_length = 16,
-  
+
   waveform_type = 1,  -- 1-8
   adsr_a = 10, adsr_d = 20, adsr_s = 80, adsr_r = 30,  -- ms
   midi_channel = 1,
   strum_flash_time = 0,  -- animation counter for strum ripple
+
+  -- ENHANCEMENT 1: Sustain pedal MIDI
+  sustain_held = false,  -- CC64 >= 64
+  sustained_notes = {},  -- table of sustained note numbers
+
+  -- ENHANCEMENT 2: Strum direction param
+  strum_delay = 20,  -- 0-80ms delay per note
+  strum_direction = 1,  -- 1=up, 2=down, 3=random
+
+  -- ENHANCEMENT 3: Screen chord name display
+  last_triggered_chord_name = "",  -- displayed chord name
+  chord_display_time = 0,  -- countdown for chord name popup
+
+  -- ENHANCEMENT 4: Velocity sensitivity
+  velocity_mode = 1,  -- 1=fixed, 2=random, 3=dynamic
+  velocity_base = 100,
+  grid_buttons_held = 0,  -- count of simultaneously held grid buttons
 }
 
 local NOTES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
@@ -149,31 +166,73 @@ end
 --  NEW: STRUM TIMING HELPER
 -- ═══════════════════════════════════════════════════════════════════
 
+local function get_velocity(base_vel)
+  -- ENHANCEMENT 4: Velocity sensitivity modes
+  if state.velocity_mode == 2 then  -- random
+    return math.max(1, math.min(127, base_vel + math.random(-15, 15)))
+  elseif state.velocity_mode == 3 then  -- dynamic (based on held grid buttons)
+    local extra = state.grid_buttons_held * 5
+    return math.max(1, math.min(127, base_vel + extra))
+  else  -- fixed (mode 1)
+    return base_vel
+  end
+end
+
 local function play_chord_with_strum(notes, velocity)
-  if state.strum_time <= 0 then
+  local num_notes = #notes
+  if num_notes == 0 then return end
+
+  local base_vel = velocity or state.velocity_base
+
+  -- ENHANCEMENT 2: Strum direction param
+  local play_notes = notes
+  if state.strum_direction == 2 then  -- down
+    play_notes = {}
+    for i = num_notes, 1, -1 do
+      table.insert(play_notes, notes[i])
+    end
+  elseif state.strum_direction == 3 then  -- random
+    play_notes = {}
+    local remaining = {}
+    for _, n in ipairs(notes) do table.insert(remaining, n) end
+    while #remaining > 0 do
+      local idx = math.random(1, #remaining)
+      table.insert(play_notes, remaining[idx])
+      table.remove(remaining, idx)
+    end
+  end
+
+  if state.strum_delay <= 0 then
     -- No strum: play all notes together
-    for _, n in ipairs(notes) do
-      engine.noteOn(n, velocity or 100)
+    for _, n in ipairs(play_notes) do
+      local vel = get_velocity(base_vel)
+      engine.noteOn(n, vel)
       if midi_out then
-        pcall(function() midi_out:note_on(n, velocity or 100, 1) end)
+        pcall(function() midi_out:note_on(n, vel, state.midi_channel) end)
+      end
+      -- ENHANCEMENT 1: Track sustained notes
+      if state.sustain_held then
+        state.sustained_notes[n] = true
       end
     end
   else
     -- Strum effect: play notes with incremental delays
-    local num_notes = #notes
-    if num_notes == 0 then return end
-    
-    local delay_ms = state.strum_time / num_notes
+    local delay_ms = state.strum_delay
     local delay_sec = delay_ms / 1000
-    
+
     -- Trigger strum animation
     state.strum_flash_time = 3
-    
+
     clock.run(function()
-      for idx, n in ipairs(notes) do
-        engine.noteOn(n, velocity or 100)
+      for idx, n in ipairs(play_notes) do
+        local vel = get_velocity(base_vel)
+        engine.noteOn(n, vel)
         if midi_out then
-          pcall(function() midi_out:note_on(n, velocity or 100, 1) end)
+          pcall(function() midi_out:note_on(n, vel, state.midi_channel) end)
+        end
+        -- ENHANCEMENT 1: Track sustained notes
+        if state.sustain_held then
+          state.sustained_notes[n] = true
         end
         if idx < num_notes then
           clock.sleep(delay_sec)
@@ -217,11 +276,16 @@ end
 
 local function play_chord(root_idx, type_idx, octave_num, vel)
   local notes = build_chord(root_idx, type_idx, octave_num)
-  play_chord_with_strum(notes, vel or 100)
+  play_chord_with_strum(notes, vel or state.velocity_base)
   state.last_chord_root = root_idx
   state.last_chord_type = type_idx
   state.suggested_chords = suggest_next_chord(root_idx, type_idx)
   state.suggestion_display_time = 30
+
+  -- ENHANCEMENT 3: Screen chord name display
+  local chord_quality = CHORD_SHAPES[type_idx].name
+  state.last_triggered_chord_name = NOTES[root_idx] .. chord_quality
+  state.chord_display_time = 40  -- display for ~4 seconds at 10fps
 end
 
 local function all_notes_off()
@@ -432,14 +496,23 @@ function redraw()
     if state.popup_time > 0 and state.popup_param then
       local pop_y = 30
       local pop_x = 64
-      
+
       screen.level(12)
       screen.move(pop_x, pop_y)
       screen.text_center(state.popup_param)
-      
+
       screen.level(10)
       screen.move(pop_x, pop_y + 10)
       screen.text_center(tostring(state.popup_val))
+    end
+
+    -- ENHANCEMENT 3: Screen chord name display (large centered text)
+    if state.chord_display_time > 0 and state.last_triggered_chord_name ~= "" then
+      screen.level(15)
+      screen.font_size(24)
+      screen.move(64, 35)
+      screen.text_center(state.last_triggered_chord_name)
+      screen.font_size(8)
     end
   end
 
@@ -495,11 +568,45 @@ function g.key(x, y, z)
   elseif y >= 3 and y <= 5 and z == 1 then
     if x <= 4 then
       state.chord_type = x
-      play_chord(state.root_note, state.chord_type, state.octave, 100)
+      -- ENHANCEMENT 4: Track held grid buttons for dynamic velocity
+      state.grid_buttons_held = state.grid_buttons_held + 1
+      play_chord(state.root_note, state.chord_type, state.octave)
+    end
+  elseif y >= 3 and y <= 5 and z == 0 then
+    if x <= 4 then
+      -- ENHANCEMENT 4: Decrement held button count
+      state.grid_buttons_held = math.max(0, state.grid_buttons_held - 1)
     end
   end
   grid_redraw()
   redraw()
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+--  MIDI EVENT HANDLER
+-- ═══════════════════════════════════════════════════════════════════
+
+function midi.event(data)
+  -- ENHANCEMENT 1: Sustain pedal MIDI (CC64)
+  local msg = midi.to_msg(data)
+
+  if msg.type == "cc" and msg.cc == 64 then
+    if msg.val >= 64 then
+      -- Sustain pedal pressed
+      state.sustain_held = true
+      state.sustained_notes = {}
+    else
+      -- Sustain pedal released: send note_off for all sustained notes
+      state.sustain_held = false
+      for note_num, _ in pairs(state.sustained_notes) do
+        engine.noteOff(note_num)
+        if midi_out then
+          pcall(function() midi_out:note_off(note_num, 0, state.midi_channel) end)
+        end
+      end
+      state.sustained_notes = {}
+    end
+  end
 end
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -515,35 +622,64 @@ function init()
       state.octave
     )
   end
-  
+
+  -- ENHANCEMENT 2: Add strum_delay parameter (0-80ms)
+  params:add_control("strum_delay", "Strum Delay", ControlSpec.new(0, 80, "lin", 1, 20, "ms"))
+  params:set_action("strum_delay", function(val)
+    state.strum_delay = val
+  end)
+
+  -- ENHANCEMENT 2: Add strum_direction parameter (up/down/random)
+  params:add_option("strum_direction", "Strum Direction", {"up", "down", "random"}, 1)
+  params:set_action("strum_direction", function(val)
+    state.strum_direction = val
+  end)
+
+  -- ENHANCEMENT 4: Add velocity_mode parameter (fixed/random/dynamic)
+  params:add_option("velocity_mode", "Velocity Mode", {"fixed", "random", "dynamic"}, 1)
+  params:set_action("velocity_mode", function(val)
+    state.velocity_mode = val
+  end)
+
+  -- ENHANCEMENT 4: Add velocity_base parameter (1-127)
+  params:add_control("velocity_base", "Velocity Base", ControlSpec.new(1, 127, "lin", 1, 100, ""))
+  params:set_action("velocity_base", function(val)
+    state.velocity_base = val
+  end)
+
   clock.run(function()
     while true do
       -- Update animations at ~10fps
       state.beat_phase = (state.beat_phase + 0.1) % 1.0
-      
+
       if state.suggestion_display_time > 0 then
         state.suggestion_display_time = state.suggestion_display_time - 1
       end
-      
+
       if state.popup_time > 0 then
         state.popup_time = state.popup_time - 1
       end
-      
+
       if state.strum_flash_time > 0 then
         state.strum_flash_time = state.strum_flash_time - 1
       end
-      
+
+      -- ENHANCEMENT 3: Decrement chord display timer
+      if state.chord_display_time > 0 then
+        state.chord_display_time = state.chord_display_time - 1
+      end
+
       -- Update loop position
       if state.loop_playing or state.loop_recording then
         state.loop_position = (state.loop_position + 0.05) % 1.0
       end
-      
+
       redraw()
       grid_redraw()
       clock.sleep(0.1)
     end
   end)
-  
+
   redraw()
   grid_redraw()
 end
