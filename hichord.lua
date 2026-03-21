@@ -194,7 +194,7 @@ local function play_chord_with_strum(notes, velocity)
       opxy_note_on(n, vel)
       
       if state.sustain_held then
-        state.sustained_notes[n] = true
+        state.sustained_notes[n] = engine_id
       end
     end
     -- Map strum timing to CC 20 (attack): no strum = fast attack
@@ -220,7 +220,7 @@ local function play_chord_with_strum(notes, velocity)
         opxy_note_on(n, vel)
         
         if state.sustain_held then
-          state.sustained_notes[n] = true
+          state.sustained_notes[n] = engine_id
         end
         if idx < num_notes then
           clock.sleep(delay_sec)
