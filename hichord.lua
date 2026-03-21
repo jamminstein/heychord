@@ -4,13 +4,13 @@
 -- Norns screen Page A = traditional param/menu display
 -- Norns screen Page B = animated HiChord OLED replica
 --
--- ══════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  GRID LAYOUT  (16 cols × 8 rows)  mirrors HiChord hardware
--- ══════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --
 --   Col:  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
--- Row 1: [──────── KEY SELECTOR  C C# D D# E F F# G G# A A# B ────]
--- Row 2: [──────── SCALE / MODE label row (dim indicators) ─────────]
+-- Row 1: [──────── KEY SELECTOR  C C# D D# E F F# G G# A A# B ─────]
+-- Row 2: [──────── SCALE / MODE label row (dim indicators) ─────]
 -- Row 3: [JOY8dir-pad         ] [F1][F2][F3][  ] [CH1 2 3 4 5 6 7 ]
 -- Row 4: [JOY8dir-pad         ] [  ][  ][  ][  ] [CH1 2 3 4 5 6 7 ]
 -- Row 5: [JOY8dir-pad (3×3)   ] [  ][  ][  ][  ] [CH1 2 3 4 5 6 7 ]
@@ -21,7 +21,7 @@
 -- Chord Buttons 1-7 span rows 3-6, cols 10-16
 -- Joystick 3×3 grid spans rows 3-5, cols 1-3
 -- F1/F2/F3 at row 3-5, cols 5-7
--- ══════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --
 -- Norns K1 (short) = toggle Page A ↔ Page B
 -- Norns K1 (hold)  = F1 (Settings)
@@ -41,9 +41,9 @@ engine.name = "PolyPerc"
 local ControlSpec = require "controlspec"
 local tab = require "tabutil"
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  STATE & SETUP
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 local g = grid.connect()
 local midi_out = nil
@@ -125,13 +125,17 @@ local CHORD_SHAPES = {
 
 local WAVEFORMS = {"sine", "square", "saw", "tri", "noise", "custom1", "custom2", "custom3"}
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  NEW: CHORD SUGGESTION ENGINE
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 local function suggest_next_chord(current_root, current_type)
   -- Music theory: common progressions in diatonic harmony
   -- Returns up to 3 suggested {root, type} pairs
+  -- Bounds check on current_root
+  if not current_root or current_root < 1 or current_root > 12 then
+    current_root = 1
+  end
   
   local sugg_map = {
     -- Major chord progressions
@@ -162,9 +166,9 @@ local function suggest_next_chord(current_root, current_type)
   }
 end
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  NEW: STRUM TIMING HELPER
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 local function get_velocity(base_vel)
   -- ENHANCEMENT 4: Velocity sensitivity modes
@@ -174,7 +178,7 @@ local function get_velocity(base_vel)
     local extra = state.grid_buttons_held * 5
     return math.max(1, math.min(127, base_vel + extra))
   else  -- fixed (mode 1)
-    return base_vel
+    return util.clamp(base_vel, 0, 127)
   end
 end
 
@@ -183,6 +187,7 @@ local function play_chord_with_strum(notes, velocity)
   if num_notes == 0 then return end
 
   local base_vel = velocity or state.velocity_base
+  base_vel = util.clamp(base_vel, 0, 127)
 
   -- ENHANCEMENT 2: Strum direction param
   local play_notes = notes
@@ -242,9 +247,9 @@ local function play_chord_with_strum(notes, velocity)
   end
 end
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  CHORD GENERATION
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 local function build_chord(root_idx, chord_type_idx, octave_num)
   local ct = CHORD_SHAPES[chord_type_idx]
@@ -270,9 +275,9 @@ local function note_num_to_name(midi_note)
   return NOTES[pitch + 1] .. octave
 end
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  AUDIO ENGINE CONTROL
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 local function play_chord(root_idx, type_idx, octave_num, vel)
   local notes = build_chord(root_idx, type_idx, octave_num)
@@ -297,9 +302,9 @@ local function all_notes_off()
   end
 end
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  GRID REDRAW
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 local function grid_redraw()
   if not g or not g.cols or g.cols == 0 then return end
@@ -308,7 +313,13 @@ local function grid_redraw()
   -- Row 1: chromatic keyboard
   local white_keys = {1, 3, 5, 6, 8, 10, 12}
   for col = 1, 12 do
-    local is_white = tab.contains(white_keys, col)
+    local is_white = false
+    for _, wk in ipairs(white_keys) do
+      if col == wk then
+        is_white = true
+        break
+      end
+    end
     local brightness = (is_white and 6 or 3)
     if col == state.root_note then
       brightness = 15
@@ -338,9 +349,9 @@ local function grid_redraw()
   g:refresh()
 end
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  SCREEN REDRAW - NEW DESIGN
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 function redraw()
   screen.clear()
@@ -380,7 +391,7 @@ function redraw()
   else
     -- ─ PAGE B: animated HiChord OLED replica ─
     
-    -- ═ SECTION 1: STATUS STRIP (y 0-8) ═
+    -- ▐ SECTION 1: STATUS STRIP (y 0-8) ▐
     screen.level(4)
     screen.move(2, 7)
     screen.text("HICHORD")
@@ -396,7 +407,7 @@ function redraw()
     screen.circle(124, 4, 1.5)
     screen.fill()
     
-    -- ═ SECTION 2: LIVE ZONE (y 9-52) ═
+    -- ▐ SECTION 2: LIVE ZONE (y 9-52) ▐
     -- Show 7 chord slots as horizontal row of blocks
     local slot_width = 15
     local slot_height = 12
@@ -475,7 +486,7 @@ function redraw()
       screen.text(state.loop_recording and "REC" or "PLAY")
     end
     
-    -- ═ SECTION 3: CONTEXT BAR (y 53-58) ═
+    -- ▐ SECTION 3: CONTEXT BAR (y 53-58) ▐
     screen.level(5)
     screen.move(5, 58)
     screen.text(WAVEFORMS[state.waveform_type])
@@ -492,7 +503,7 @@ function redraw()
     screen.move(122, 58)
     screen.text("CH" .. state.midi_channel)
     
-    -- ═ SECTION 4: TRANSIENT PARAMETER POPUP ═
+    -- ▐ SECTION 4: TRANSIENT PARAMETER POPUP ▐
     if state.popup_time > 0 and state.popup_param then
       local pop_y = 30
       local pop_x = 64
@@ -519,9 +530,9 @@ function redraw()
   screen.update()
 end
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  NORNS INPUT
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 function key(n, z)
   if n == 1 and z == 1 then
@@ -542,7 +553,7 @@ function enc(n, d)
     state.popup_val = NOTES[state.root_note]
     state.popup_time = 8
   elseif n == 2 then
-    state.chord_type = math.max(1, math.min(4, state.chord_type + d))
+    state.chord_type = util.clamp(state.chord_type + d, 1, #CHORD_SHAPES)
     state.popup_param = "CHORD"
     state.popup_val = CHORD_SHAPES[state.chord_type].name
     state.popup_time = 8
@@ -567,7 +578,7 @@ function g.key(x, y, z)
     end
   elseif y >= 3 and y <= 5 and z == 1 then
     if x <= 4 then
-      state.chord_type = x
+      state.chord_type = util.clamp(x, 1, #CHORD_SHAPES)
       -- ENHANCEMENT 4: Track held grid buttons for dynamic velocity
       state.grid_buttons_held = state.grid_buttons_held + 1
       play_chord(state.root_note, state.chord_type, state.octave)
@@ -582,9 +593,9 @@ function g.key(x, y, z)
   redraw()
 end
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  MIDI EVENT HANDLER
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 function midi.event(data)
   -- ENHANCEMENT 1: Sustain pedal MIDI (CC64)
@@ -609,9 +620,9 @@ function midi.event(data)
   end
 end
 
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 --  INIT
--- ═══════════════════════════════════════════════════════════════════
+-- ▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐▐
 
 function init()
   -- Initialize chord slots with notes
