@@ -284,6 +284,7 @@ local function all_notes_off()
 end
 
 local function grid_redraw()
+  if not g.device then return end
   if not g or not g.cols or g.cols == 0 then return end
   g:all(0)
 
