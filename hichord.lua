@@ -1,8 +1,9 @@
--- hichord.lua  v3.0 with OP-XY MIDI
+-- hichord.lua  v4.0 — Sunday Service Edition
 -- Norns port of HiChord (hichord.shop) firmware 2.6.9
 -- Grid = physical HiChord device replica (16×8)
 -- Norns screen Page A = traditional param/menu display
 -- Norns screen Page B = animated HiChord OLED replica
+-- Page C = SUNDAY SERVICE gospel-hip-hop automation
 -- OP-XY MIDI: strum timing mapped to CC 20 (attack)
 
 engine.name = "MollyThePoly"
@@ -10,6 +11,7 @@ local MollyThePoly = require "molly_the_poly/lib/molly_the_poly_engine"
 
 local ControlSpec = require "controlspec"
 local tab = require "tabutil"
+local gospel = require "hichord/lib/gospel"
 
 -- OP-XY MIDI helpers
 local opxy_out = nil
@@ -100,6 +102,12 @@ local state = {
   
   engine_notes = {},
   next_engine_id = 1,
+
+  -- Sunday Service gospel automation
+  gospel_mode = false,     -- true = Page C active, gospel engine running
+  gospel_state = nil,      -- initialized in init()
+  gospel_clock_id = nil,
+  gospel_page = false,     -- show gospel display (Page C)
 }
 
 local NOTES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
@@ -285,6 +293,91 @@ local function all_notes_off()
   end
 end
 
+----------------------------------------------------------------------
+-- SUNDAY SERVICE: gospel voice playback via engine + MIDI
+----------------------------------------------------------------------
+local function gospel_voice_on(note, voice_type, vel)
+  -- Use the standard engine (MollyThePoly) with voice-appropriate settings
+  local freq = midi_to_hz(note)
+  local engine_id = state.next_engine_id
+  engine.noteOn(engine_id, freq, vel)
+  state.engine_notes[note * 10 + voice_type] = engine_id
+  state.next_engine_id = state.next_engine_id + 1
+
+  -- Also send MIDI with voice-type-specific channel offsets
+  if midi_out then
+    local ch = math.min(16, state.midi_channel + voice_type)
+    pcall(function() midi_out:note_on(note, math.floor(vel * 127), ch) end)
+  end
+  opxy_note_on(note, math.floor(vel * 100))
+end
+
+local function gospel_voice_off(note, voice_type)
+  local key = note * 10 + voice_type
+  local engine_id = state.engine_notes[key]
+  if engine_id then
+    engine.noteOff(engine_id)
+    state.engine_notes[key] = nil
+  end
+  if midi_out then
+    local ch = math.min(16, state.midi_channel + voice_type)
+    pcall(function() midi_out:note_off(note, 0, ch) end)
+  end
+  opxy_note_off(note)
+end
+
+local function gospel_all_off()
+  for key, engine_id in pairs(state.engine_notes) do
+    engine.noteOff(engine_id)
+  end
+  state.engine_notes = {}
+  all_notes_off()
+end
+
+-- Start the Sunday Service automation clock
+local function gospel_start()
+  if state.gospel_clock_id then return end
+  state.gospel_mode = true
+  gospel.start(state.gospel_state)
+
+  state.gospel_clock_id = clock.run(function()
+    while state.gospel_mode do
+      local result = gospel.tick(state.gospel_state)
+
+      -- Process note-offs
+      for _, v in ipairs(result.notes_off) do
+        gospel_voice_off(v.note, v.voice)
+      end
+
+      -- Process note-ons with humanized timing
+      local humanize = state.gospel_state.humanize
+      for i, v in ipairs(result.notes_on) do
+        if humanize > 0 and i > 1 then
+          -- Subtle timing offset for human feel
+          clock.sleep((math.random() * 0.03) * humanize)
+        end
+        gospel_voice_on(v.note, v.voice, v.vel)
+      end
+
+      -- Wait one beat
+      clock.sync(1)
+    end
+  end)
+end
+
+local function gospel_stop()
+  state.gospel_mode = false
+  local offs = gospel.stop(state.gospel_state)
+  for _, v in ipairs(offs) do
+    gospel_voice_off(v.note, v.voice)
+  end
+  gospel_all_off()
+  if state.gospel_clock_id then
+    clock.cancel(state.gospel_clock_id)
+    state.gospel_clock_id = nil
+  end
+end
+
 local function grid_redraw()
   if not g.device then return end
   if not g or not g.cols or g.cols == 0 then return end
@@ -321,7 +414,40 @@ local function grid_redraw()
 
   g:led(1, 6, state.strum_time > 0 and 10 or 2)
   g:led(2, 6, 2)
-  
+
+  -- Row 7: Sunday Service controls
+  -- col 1 = gospel start/stop, col 2 = build, col 3-10 = progression select
+  -- col 11-12 = call/response mode
+  g:led(1, 7, state.gospel_mode and 15 or 4)
+  g:led(2, 7, (state.gospel_state and state.gospel_state.building) and 12 or 4)
+  if state.gospel_state then
+    for i, name in ipairs(gospel.PROGRESSION_NAMES) do
+      if i <= 8 then
+        local bright = (name == state.gospel_state.progression_name) and 15 or 5
+        g:led(i + 2, 7, bright)
+      end
+    end
+    -- Call/response modes
+    for i = 1, math.min(4, #gospel.CALL_RESPONSE_NAMES) do
+      local bright = (gospel.CALL_RESPONSE_NAMES[i] == state.gospel_state.call_response_mode) and 12 or 3
+      g:led(i + 12, 7, bright)
+    end
+  end
+
+  -- Row 8: intensity (columns 1-12 = intensity meter/control), col 13-16 = key select
+  if state.gospel_state then
+    local int_level = math.floor(state.gospel_state.intensity * 12)
+    for col = 1, 12 do
+      g:led(col, 8, col <= int_level and 10 or 2)
+    end
+    for i, gk in ipairs(gospel.GOSPEL_KEYS) do
+      if i <= 4 then
+        local bright = (gk.root == state.gospel_state.key_root) and 15 or 5
+        g:led(i + 12, 8, bright)
+      end
+    end
+  end
+
   g:refresh()
 end
 
@@ -329,10 +455,92 @@ function redraw()
   screen.clear()
   screen.aa(0)
   
-  if state.page_a then
+  if state.gospel_page then
+    -- PAGE C: SUNDAY SERVICE gospel automation display
+    local gs = state.gospel_state
+
+    -- Header
+    screen.level(15)
+    screen.move(0, 8)
+    screen.text("SUNDAY SERVICE")
+    screen.level(gs.active and 15 or 4)
+    screen.move(100, 8)
+    screen.text(gs.active and "LIVE" or "STOP")
+
+    -- Current chord (large)
+    if gs.display_chord_name ~= "" then
+      screen.level(15)
+      screen.font_size(16)
+      screen.move(64, 26)
+      screen.text_center(gs.display_chord_name)
+      screen.font_size(8)
+    end
+
+    -- Progression name
+    screen.level(6)
+    screen.move(0, 34)
+    screen.text(gs.progression_name)
+    screen.move(70, 34)
+    screen.text("step " .. gs.progression_step)
+
+    -- Voice count and intensity bar
+    screen.level(5)
+    screen.move(0, 42)
+    screen.text("voices: " .. gs.display_voice_count)
+
+    -- Intensity bar
+    screen.level(3)
+    screen.rect(55, 37, 60, 5)
+    screen.stroke()
+    screen.level(12)
+    screen.rect(55, 37, math.floor(60 * gs.intensity), 5)
+    screen.fill()
+    if gs.building then
+      screen.level(15)
+      screen.move(117, 42)
+      screen.text("BUILD")
+    end
+
+    -- Call/response indicator
+    screen.level(gs.call_response_phase == "call" and 12 or 5)
+    screen.move(0, 50)
+    screen.text("CALL")
+    screen.level(gs.call_response_phase == "respond" and 12 or 5)
+    screen.move(30, 50)
+    screen.text("RESP")
+    screen.level(4)
+    screen.move(60, 50)
+    screen.text(gs.call_response_mode)
+
+    -- Next chords suggestion
+    local suggestions = gospel.suggest_next(gs)
+    screen.level(4)
+    screen.move(0, 58)
+    screen.text("next:")
+    screen.level(8)
+    for i, s in ipairs(suggestions) do
+      if i <= 3 then
+        screen.move(28 + (i-1) * 35, 58)
+        screen.text(s.name)
+      end
+    end
+
+    -- Key display
+    local NOTES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+    screen.level(6)
+    screen.move(110, 58)
+    screen.text("K:" .. NOTES[gs.key_root])
+
+    -- Beat pulse
+    local pulse = math.floor(8 + state.beat_phase * 7)
+    screen.level(pulse)
+    screen.circle(124, 4, 2)
+    screen.fill()
+
+  elseif state.page_a then
     screen.level(15)
     screen.move(0, 10)
-    screen.text("HICHORD v3.0")
+    screen.text("HICHORD v4.0")
     
     screen.level(8)
     screen.move(0, 22)
@@ -496,33 +704,101 @@ function key(n, z)
     return
   elseif n == 2 and z == 1 then
     if k1_held then
-      state.page_a = not state.page_a
+      -- Cycle pages: A -> B -> C (gospel) -> A
+      if state.page_a then
+        state.page_a = false
+        state.gospel_page = false
+      elseif not state.gospel_page then
+        state.gospel_page = true
+        state.page_a = false
+      else
+        state.gospel_page = false
+        state.page_a = true
+      end
     else
-      state.chord_type = (state.chord_type % 4) + 1
+      if state.gospel_page then
+        -- In gospel mode: K2 = start/stop automation
+        if state.gospel_mode then
+          gospel_stop()
+        else
+          gospel_start()
+        end
+      else
+        state.chord_type = (state.chord_type % 4) + 1
+      end
     end
   elseif n == 3 and z == 1 then
-    state.octave = math.min(7, state.octave + 1)
+    if state.gospel_page then
+      -- In gospel mode: K3 = trigger build
+      if state.gospel_state.building then
+        gospel.release_build(state.gospel_state)
+      else
+        gospel.trigger_build(state.gospel_state, 1.0, 0.05)
+      end
+    else
+      state.octave = math.min(7, state.octave + 1)
+    end
   end
   grid_redraw()
   redraw()
 end
 
 function enc(n, d)
-  if n == 1 then
-    state.root_note = ((state.root_note - 1 + d) % 12) + 1
-    state.popup_param = "ROOT"
-    state.popup_val = NOTES[state.root_note]
-    state.popup_time = 8
-  elseif n == 2 then
-    state.chord_type = util.clamp(state.chord_type + d, 1, #CHORD_SHAPES)
-    state.popup_param = "CHORD"
-    state.popup_val = CHORD_SHAPES[state.chord_type].name
-    state.popup_time = 8
-  elseif n == 3 then
-    state.strum_time = math.max(0, math.min(100, state.strum_time + d))
-    state.popup_param = "STRUM"
-    state.popup_val = state.strum_time .. "ms"
-    state.popup_time = 8
+  if state.gospel_page then
+    -- Gospel mode encoders
+    local gs = state.gospel_state
+    if n == 1 then
+      -- E1: cycle through progressions
+      local names = gospel.PROGRESSION_NAMES
+      local cur_idx = 1
+      for i, name in ipairs(names) do
+        if name == gs.progression_name then cur_idx = i end
+      end
+      cur_idx = ((cur_idx - 1 + d) % #names) + 1
+      gs.progression_name = names[cur_idx]
+      gs.progression_step = 1
+      gs.beat_counter = 0
+      state.popup_param = "PROG"
+      state.popup_val = gs.progression_name
+      state.popup_time = 12
+    elseif n == 2 then
+      -- E2: gospel key
+      local keys = gospel.GOSPEL_KEYS
+      local cur_idx = 1
+      for i, gk in ipairs(keys) do
+        if gk.root == gs.key_root then cur_idx = i end
+      end
+      cur_idx = ((cur_idx - 1 + d) % #keys) + 1
+      gs.key_root = keys[cur_idx].root
+      state.popup_param = "KEY"
+      state.popup_val = keys[cur_idx].name
+      state.popup_time = 12
+    elseif n == 3 then
+      -- E3: manual intensity
+      gs.intensity = math.max(0, math.min(1.0, gs.intensity + d * 0.05))
+      gs.target_intensity = gs.intensity
+      state.popup_param = "INTENSITY"
+      state.popup_val = math.floor(gs.intensity * 100) .. "%"
+      state.popup_time = 8
+    end
+  else
+    -- Standard mode encoders
+    if n == 1 then
+      state.root_note = ((state.root_note - 1 + d) % 12) + 1
+      state.popup_param = "ROOT"
+      state.popup_val = NOTES[state.root_note]
+      state.popup_time = 8
+    elseif n == 2 then
+      state.chord_type = util.clamp(state.chord_type + d, 1, #CHORD_SHAPES)
+      state.popup_param = "CHORD"
+      state.popup_val = CHORD_SHAPES[state.chord_type].name
+      state.popup_time = 8
+    elseif n == 3 then
+      state.strum_time = math.max(0, math.min(100, state.strum_time + d))
+      state.popup_param = "STRUM"
+      state.popup_val = state.strum_time .. "ms"
+      state.popup_time = 8
+    end
   end
   grid_redraw()
   redraw()
@@ -546,6 +822,59 @@ function g.key(x, y, z)
   elseif y >= 3 and y <= 5 and z == 0 then
     if x <= 4 then
       state.grid_buttons_held = math.max(0, state.grid_buttons_held - 1)
+    end
+  elseif y == 7 and z == 1 then
+    -- Sunday Service row
+    local gs = state.gospel_state
+    if x == 1 then
+      -- Start/stop gospel automation
+      if state.gospel_mode then
+        gospel_stop()
+      else
+        state.gospel_page = true
+        state.page_a = false
+        gospel_start()
+      end
+    elseif x == 2 then
+      -- Build toggle
+      if gs.building then
+        gospel.release_build(gs)
+      else
+        gospel.trigger_build(gs, 1.0, 0.05)
+      end
+    elseif x >= 3 and x <= 10 then
+      -- Progression select (cols 3-10)
+      local idx = x - 2
+      if idx <= #gospel.PROGRESSION_NAMES then
+        local was_playing = state.gospel_mode
+        if was_playing then gospel_stop() end
+        gs.progression_name = gospel.PROGRESSION_NAMES[idx]
+        gs.progression_step = 1
+        gs.beat_counter = 0
+        if was_playing then gospel_start() end
+      end
+    elseif x >= 13 and x <= 16 then
+      -- Call/response mode (cols 13-16)
+      local idx = x - 12
+      if idx <= #gospel.CALL_RESPONSE_NAMES then
+        gs.call_response_mode = gospel.CALL_RESPONSE_NAMES[idx]
+        gs.call_response_beat = 0
+        gs.call_response_phase = "call"
+      end
+    end
+  elseif y == 8 and z == 1 then
+    -- Intensity / key row
+    local gs = state.gospel_state
+    if x >= 1 and x <= 12 then
+      -- Set intensity directly (1-12 → 0.08-1.0)
+      gs.intensity = x / 12
+      gs.target_intensity = gs.intensity
+    elseif x >= 13 and x <= 16 then
+      -- Gospel key select
+      local idx = x - 12
+      if idx <= #gospel.GOSPEL_KEYS then
+        gs.key_root = gospel.GOSPEL_KEYS[idx].root
+      end
     end
   end
   grid_redraw()
@@ -593,6 +922,9 @@ function init()
     )
   end
 
+  -- Initialize Sunday Service gospel automation
+  state.gospel_state = gospel.new_state()
+
   params:add_separator("OP-XY")
   params:add_option("opxy_enabled", "OP-XY output", {"off", "on"}, 1)
   params:add_number("opxy_device", "OP-XY MIDI device", 1, 4, 1)
@@ -617,6 +949,52 @@ function init()
   params:add_control("velocity_base", "Velocity Base", ControlSpec.new(1, 127, "lin", 1, 100, ""))
   params:set_action("velocity_base", function(val)
     state.velocity_base = val
+  end)
+
+  -- Sunday Service parameters
+  params:add_separator("SUNDAY SERVICE")
+
+  params:add_option("gospel_progression", "Progression",
+    gospel.PROGRESSION_NAMES, 1)
+  params:set_action("gospel_progression", function(val)
+    state.gospel_state.progression_name = gospel.PROGRESSION_NAMES[val]
+    state.gospel_state.progression_step = 1
+    state.gospel_state.beat_counter = 0
+  end)
+
+  params:add_option("gospel_key", "Gospel Key",
+    {"C", "Db", "Eb", "F", "Ab", "Bb"}, 3)
+  params:set_action("gospel_key", function(val)
+    state.gospel_state.key_root = gospel.GOSPEL_KEYS[val].root
+  end)
+
+  params:add_control("gospel_intensity", "Intensity",
+    ControlSpec.new(0, 100, "lin", 1, 50, "%"))
+  params:set_action("gospel_intensity", function(val)
+    state.gospel_state.intensity = val / 100
+    state.gospel_state.target_intensity = val / 100
+  end)
+
+  params:add_control("gospel_humanize", "Humanize",
+    ControlSpec.new(0, 100, "lin", 1, 30, "%"))
+  params:set_action("gospel_humanize", function(val)
+    state.gospel_state.humanize = val / 100
+  end)
+
+  params:add_option("gospel_call_response", "Call/Response",
+    gospel.CALL_RESPONSE_NAMES, 1)
+  params:set_action("gospel_call_response", function(val)
+    state.gospel_state.call_response_mode = gospel.CALL_RESPONSE_NAMES[val]
+  end)
+
+  params:add_option("gospel_sub", "Sub Bass", {"off", "on"}, 2)
+  params:set_action("gospel_sub", function(val)
+    state.gospel_state.sub_enabled = (val == 2)
+  end)
+
+  params:add_option("gospel_auto_advance", "Auto Advance", {"off", "on"}, 2)
+  params:set_action("gospel_auto_advance", function(val)
+    state.gospel_state.auto_advance = (val == 2)
   end)
 
   screen_clock_id = clock.run(function()
@@ -654,6 +1032,7 @@ function init()
 end
 
 function cleanup()
+  if state.gospel_mode then gospel_stop() end
   all_notes_off()
   if screen_clock_id then clock.cancel(screen_clock_id) end
 end
