@@ -330,6 +330,8 @@ local function gospel_start()
   gospel.start(state.gospel_state)
 
   state.gospel_clock_id = clock.run(function()
+    -- Snap to next beat boundary so choir aligns with drums
+    clock.sync(1)
     while state.gospel_mode do
       local result = gospel.tick(state.gospel_state)
 
@@ -348,7 +350,7 @@ local function gospel_start()
         gospel_voice_on(v.note, v.voice, v.vel)
       end
 
-      -- Wait one beat
+      -- Wait one beat (synced to global clock)
       clock.sync(1)
     end
   end)

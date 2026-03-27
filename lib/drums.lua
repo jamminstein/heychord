@@ -650,6 +650,8 @@ function drums.start()
   seq.running = true
   seq.step = 1
   seq_clock_id = clock.run(function()
+    -- Snap to next 16th note boundary so drums align with choir
+    clock.sync(1/4)
     while seq.running do
       seq_tick()
       clock.sync(1/4) -- sync to 16th notes (1 beat = 4 sixteenths)
